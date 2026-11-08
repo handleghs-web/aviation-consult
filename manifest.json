@@ -1,0 +1,20 @@
+{
+  "name": "\ud56d\uacf5\uc2e0\uccb4\uac80\uc0ac \ud310\uc815\ubcf4\uc870",
+  "short_name": "\ud56d\uacf5\ud310\uc815\ubcf4\uc870",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#eef2f3",
+  "theme_color": "#0b5d73",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
