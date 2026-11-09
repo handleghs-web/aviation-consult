@@ -203,16 +203,84 @@ function updateSyncStatus(message) {
   }
 }
 
-async function readGASRows() {
-  const url = GAS_URL + (GAS_URL.includes('?') ? '&' : '?') +
-              'action=getRows&_=' + Date.now();
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
-  if (!res.ok) throw new Error('시트 읽기 HTTP 오류: ' + res.status);
-  const json = await res.json();
-  if (json.status !== 'success' || !Array.isArray(json.rows)) {
-    throw new Error('구글 시트에서 정상적인 DB 응답을 받지 못했습니다.');
-  }
-  return json.rows;
+function readGASRows() {
+  return new Promise((resolve, reject) => {
+    if (!GAS_URL) return reject(new Error('구글 앱스 스크립트 URL이 설정되지 않았습니다.'));
+    const callbackName = '__aviationGAS_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const script = document.createElement('script');
+    const timer = setTimeout(() => finish(new Error('구글 시트 응답 시간 초과')), 15000);
+
+    function finish(err, data) {
+      clearTimeout(timer);
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
+      script.remove();
+      if (err) reject(err); else resolve(data);
+    }
+
+    window[callbackName] = data => {
+      if (!data || data.status !== 'success' || !Array.isArray(data.rows)) {
+        finish(new Error((data && data.message) || '구글 시트에서 정상적인 응답을 받지 못했습니다.'));
+        return;
+      }
+      finish(null, data.rows);
+    };
+
+    script.onerror = () => finish(new Error('구글 시트 읽기 요청이 차단되었습니다. URL과 웹 앱 배포 권한을 확인하세요.'));
+    const sep = GAS_URL.includes('?') ? '&' : '?';
+    script.src = GAS_URL + sep + 'action=getRows&callback=' +
+      encodeURIComponent(callbackName) + '&_=' + Date.now();
+    document.head.appendChild(script);
+  });
+}
+
+function postGASPayload(payload) {
+  return new Promise((resolve, reject) => {
+    if (!GAS_URL) return reject(new Error('구글 앱스 스크립트 URL이 설정되지 않았습니다.'));
+
+    const frameName = '__aviationPostFrame_' + Date.now();
+    const iframe = document.createElement('iframe');
+    iframe.name = frameName;
+    iframe.style.display = 'none';
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = GAS_URL;
+    form.target = frameName;
+    form.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'payload';
+    input.value = JSON.stringify(payload);
+    form.appendChild(input);
+
+    let submitted = false;
+    let settled = false;
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('구글 시트 전송 응답 시간 초과'));
+    }, 20000);
+
+    function cleanup() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      iframe.remove();
+      form.remove();
+    }
+
+    iframe.onload = () => {
+      if (!submitted || settled) return;
+      // iframe 응답 본문은 교차 출처라 읽지 않고, 후속 JSONP 조회로 저장 여부를 확인한다.
+      cleanup();
+      resolve();
+    };
+
+    document.body.appendChild(iframe);
+    document.body.appendChild(form);
+    submitted = true;
+    form.submit();
+  });
 }
 
 function sameCellValue(a, b) {
@@ -234,19 +302,12 @@ async function syncWithGAS() {
   updateSyncStatus();
 
   try {
-    // Apps Script의 교차 출처 응답이 브라우저에서 차단될 수 있으므로
-    // no-cors로 전송한 뒤 GET으로 실제 저장 여부를 검증한다.
-    // text/plain은 CORS safelisted Content-Type이므로 preflight를 유발하지 않는다.
-    await fetch(GAS_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      redirect: 'follow',
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: JSON.stringify({ action: 'updateRows', rows: snapshot })
-    });
+    // HTML form POST는 브라우저 CORS fetch 제한을 피하고,
+    // Apps Script doPost의 e.parameter.payload로 전달한다.
+    await postGASPayload({ action: 'updateRows', rows: snapshot });
 
-    // Apps Script 저장 완료를 기다린 뒤 스프레드시트 값을 다시 읽는다.
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    // 저장 직후 JSONP(GET)로 실제 시트 반영 여부를 확인한다.
+    await new Promise(resolve => setTimeout(resolve, 900));
     const remoteRows = await readGASRows();
     const remoteBySeq = new Map(remoteRows.map(r => [Number(r.seq), r]));
 
