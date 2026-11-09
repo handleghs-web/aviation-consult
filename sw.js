@@ -1,78 +1,27 @@
-
-const CACHE_NAME = 'aviation-med-pwa-v2';
-
-// 앱 구동에 필요한 정적 파일만 캐시
-const ASSETS = [
-  './index.html',
-  './manifest.json'
-];
-
+const CACHE_NAME = 'aviation-med-pwa-v4';
+const APP_ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(ASSETS))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_ASSETS)).catch(err => console.warn('Precache:',err)));
+  self.skipWaiting();
 });
-
 self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys
-          .filter(key => key !== CACHE_NAME)
-          .map(key => caches.delete(key))
-      ))
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k=>k.startsWith('aviation-med-pwa-') && k!==CACHE_NAME).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
 });
-
 self.addEventListener('fetch', event => {
-  const request = event.request;
-
-  // GET 이외의 요청은 서비스 워커가 건드리지 않음
-  if (request.method !== 'GET') return;
-
-  const url = new URL(request.url);
-
-  // Google Apps Script 및 외부 서버 요청은 캐시하지 않고 직접 통신
-  if (url.origin !== self.location.origin) {
+  const req=event.request;
+  if (req.method!=='GET') return;
+  const url=new URL(req.url);
+  // Apps Script 등 외부 도메인은 절대 가로채거나 캐시하지 않는다.
+  if (url.origin!==self.location.origin) return;
+  if (req.mode==='navigate' || url.pathname.endsWith('/index.html') || url.pathname.endsWith('/')) {
+    event.respondWith(fetch(req,{cache:'no-store'}).then(res=>{
+      if(res && res.ok) caches.open(CACHE_NAME).then(c=>c.put('./index.html',res.clone()));
+      return res;
+    }).catch(()=>caches.match('./index.html').then(c=>c||caches.match('./'))));
     return;
   }
-
-  // 앱 HTML은 항상 네트워크 우선으로 최신 버전 확인
-  if (url.pathname.endsWith('/index.html') ||
-      url.pathname.endsWith('/')) {
-    event.respondWith(
-      fetch(request, { cache: 'no-store' })
-        .then(response => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache =>
-              cache.put(request, copy)
-            );
-          }
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
-
-  // 나머지 정적 파일은 캐시 우선
-  event.respondWith(
-    caches.match(request).then(cached => {
-      if (cached) return cached;
-
-      return fetch(request).then(response => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache =>
-            cache.put(request, copy)
-          );
-        }
-        return response;
-      });
-    })
-  );
+  event.respondWith(caches.match(req).then(cached=>cached||fetch(req).then(res=>{
+    if(res && res.ok) caches.open(CACHE_NAME).then(c=>c.put(req,res.clone()));
+    return res;
+  })));
 });
